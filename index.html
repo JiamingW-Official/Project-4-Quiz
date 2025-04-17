@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>Interactive Personal Finance Quiz</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; cursor: none; }
+    body {
+      --x: 50vw; --y: 50vh;
+      background: radial-gradient(2200px at var(--x) var(--y), rgba(29,112,181,0.82) 0%, #0a0f17 88%);
+      font-family: "Segoe UI", sans-serif; color: #e2e8f0; transition: background 0.15s;
+    }
+    #cursor {
+      position: fixed; top: 0; left: 0; width: 14px; height: 14px;
+      border: 2px solid #c4d4f7; border-radius: 50%; pointer-events: none;
+      transform: translate(-50%,-50%); transition: background 0.15s, transform 0.15s;
+      z-index: 999;
+    }
+    .tooltip { border-bottom: 1px dashed #7dd3fc; cursor: help; }
+    #glossary {
+      position: fixed; bottom: 88px; right: 24px; max-width: 300px;
+      background: rgba(30,41,59,0.95); padding: 12px 16px; border-radius: 6px;
+      font-size: 0.9em; line-height: 1.4; display: none; z-index: 998;
+    }
+    #wrap { width:100vw; height:100vh; overflow:hidden; position:relative; }
+    #slides { display:flex; height:100%; transition: transform 0.55s cubic-bezier(0.4,0.2,0.2,1); }
+    .slide {
+      flex:0 0 100vw; padding:60px 40px; overflow-y:auto; position:relative;
+    }
+    .slide h2 { font-size:1.55em; margin-bottom:16px; }
+    .question { font-size:1.24em; margin-bottom:24px; line-height:1.45; max-width:840px; }
+    form { margin-bottom:40px; width:100%; }
+    label {
+      display:flex; align-items:center; margin:14px 0; font-size:1.08em;
+      gap:10px; cursor:pointer; user-select:none; transition:font-weight .2s;
+    }
+    input[type=radio] {
+      appearance:none; width:18px; height:18px; border:2px solid #7dd3fc;
+      border-radius:50%; position:relative; flex-shrink:0;
+    }
+    input[type=radio]::after {
+      content:""; position:absolute; inset:2px; border-radius:50%;
+      background:#7dd3fc; opacity:0; transition:opacity .2s;
+    }
+    input[type=radio]:checked::after { opacity:1; }
+    input[type=radio]:checked + span { font-weight:700; }
+    input[type=range] {
+      -webkit-appearance:none; width:84%; height:4px; background:#334155;
+      border-radius:2px; cursor:pointer;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance:none; width:18px; height:18px; border-radius:50%;
+      background:#7dd3fc; border:2px solid #1e3a8a; transition:transform .15s;
+    }
+    input[type=range]:active::-webkit-slider-thumb { transform:scale(1.2); }
+    .rangeVal { margin-left:10px; font-weight:700; color:#7dd3fc; }
+    .summary { margin-top:12px; font-size:0.95em; color:#93c5fd; }
+    .nav { position:absolute; bottom:32px; right:44px; display:flex; gap:16px; }
+    button {
+      padding:12px 28px; background:linear-gradient(45deg,#60a5fa,#0ea5e9);
+      border:none; border-radius:6px; color:#0f172a; font-weight:bold;
+      cursor:pointer; transition:transform .2s,box-shadow .2s;
+    }
+    button:hover { transform:translateY(-3px); box-shadow:0 4px 12px rgba(96,165,250,0.45); }
+    .chartBox {
+      width:820px; height:420px; background:#1e293b; border:1px solid #334155;
+      margin-bottom:32px;
+    }
+    canvas { width:100%; height:100%; display:block; }
+    #analysis,#plan { font-size:1.1em; line-height:1.55; max-width:860px; }
+    #plan ul li { margin:16px 0; }
+  </style>
+</head>
+<body>
+  <div id="cursor"></div>
+  <div id="glossary"></div>
+  <div id="wrap"><div id="slides"></div></div>
+
+  <script>
+  // ===== 光标 & 背景联动 =====
+  const cursorEl = document.getElementById('cursor'), bodyEl = document.body;
+  window.addEventListener('pointermove', e => {
+    cursorEl.style.top = e.clientY + 'px';
+    cursorEl.style.left = e.clientX + 'px';
+    bodyEl.style.setProperty('--x', e.clientX + 'px');
+    bodyEl.style.setProperty('--y', e.clientY + 'px');
+  });
+  function toggleCursor(h) {
+    if (h) {
+      cursorEl.style.background = '#93c5fd';
+      cursorEl.style.transform = 'translate(-50%,-50%) scale(1.45)';
+    } else {
+      cursorEl.style.background = 'transparent';
+      cursorEl.style.transform = 'translate(-50%,-50%) scale(1)';
+    }
+  }
+  ['mouseover','mouseout'].forEach(evt => {
+    document.addEventListener(evt, e => {
+      if (e.target.closest('button,label,.tooltip')) toggleCursor(evt==='mouseover');
+    });
+  });
+
+  // ===== 问题数据 =====
+  const Qs = [
+    {type:'range', name:'q1', q:`What percentage of your monthly income do you allocate to <span class="tooltip" data-tip="The portion of income set aside rather than spent.">savings</span>?`, min:0, max:100, step:5, def:10, explain:'Saving 15%+ accelerates wealth building.'},
+    {type:'range', name:'q2', q:`How many months of living expenses do you keep in an <span class="tooltip" data-tip="Cash set aside for unexpected expenses.">emergency fund</span>?`, min:0, max:12, step:1, def:0, explain:'Target 3–6 months to cushion shocks.'},
+    {type:'radio', name:'q3', q:`Your current <span class="tooltip" data-tip="Outstanding education loans relative to income.">student-loan load</span> is…`, opts:['None','<1× annual income','1–2× annual income','>2× annual income'], explain:'Large balances can delay investing.'},
+    {type:'radio', name:'q4', q:`How often do you track your <span class="tooltip" data-tip="Assign every dollar a job.">budget</span>?`, opts:['Daily','Weekly','Monthly','Rarely'], explain:'Frequent reviews curb overspending.'},
+    {type:'radio', name:'q5', q:`Your reaction to a sudden 15% portfolio drop is…`, opts:['Sell to stop-loss','Hold steady','Buy the dip','Unsure'], explain:'Emotional reactions often erode returns.'},
+    {type:'chart', name:'q6', pattern:'flag', q:`Draw the channel lines that define a <span class="tooltip" data-tip="Brief downward-sloping consolidation after a sharp rise.">bullish flag</span>.`, explain:'A breakout above the upper line signals continuation.'},
+    {type:'range', name:'q7', q:`What percentage of your long-term portfolio would you allocate to <span class="tooltip" data-tip="Stocks representing ownership.">equities</span>?`, min:0, max:100, step:5, def:60, explain:'More equities boost growth but raise volatility.'},
+    {type:'radio', name:'q8', q:`When headlines warn of rising <span class="tooltip" data-tip="General increase in prices over time.">inflation</span>, you…`, opts:['Shift to cash','Buy real assets','Add TIPS','Ignore'], explain:'Real assets and TIPS often hedge inflation.'},
+    {type:'radio', name:'q9', q:`Does your employer offer a tax-advantaged <span class="tooltip" data-tip="Employer matching your contribution.">401(k) match</span>?`, opts:['Yes, max it','Yes, partly','No match','Unsure'], explain:'Match contributions are free return.'},
+    {type:'radio', name:'q10', q:`Preferred portfolio <span class="tooltip" data-tip="Restoring target weights.">rebalancing</span> frequency?`, opts:['Monthly','Quarterly','Annually','Never'], explain:'Regular rebalancing controls drift.'},
+    {type:'radio', name:'q11', q:`You mainly invest through…`, opts:['Index funds','Single stocks','Crypto','Not yet investing'], explain:'Index funds lower idiosyncratic risk.'},
+    {type:'radio', name:'q12', q:`Your typical holding <span class="tooltip" data-tip="Duration you keep an investment.">horizon</span> is…`, opts:['Days','Months','Years','Decades'], explain:'Longer horizons tolerate volatility.'},
+    {type:'radio', name:'q13', q:`Rate your understanding of <span class="tooltip" data-tip="Spreading investments across assets.">diversification</span>.`, opts:['None','Basic','Intermediate','Advanced'], explain:'Diversification smooths returns.'},
+    {type:'chart', name:'q14', pattern:'triangle', q:`Identify and extend the <span class="tooltip" data-tip="Price ceiling where supply exceeds demand.">resistance line</span> on this ascending triangle.`, explain:'Triangle breakouts often precede sharp moves.'},
+    {type:'radio', name:'q15', q:`Comfort level with <span class="tooltip" data-tip="Contracts granting right, not obligation.">options</span> trading?`, opts:['None','Beginner','Intermediate','Advanced'], explain:'Options require strict risk controls.'},
+    {type:'radio', name:'q16', q:`When sensational market news appears, you…`, opts:['Trade immediately','Research calmly','Wait for confirmation','Ignore'], explain:'Reacting without plan invites bias.'},
+    {type:'radio', name:'q17', q:`Do you automate investing with a <span class="tooltip" data-tip="Algorithm-driven portfolio management.">robo-advisor</span>?`, opts:['Yes, fully','Partly','No','Unsure'], explain:'Automation enforces discipline.'},
+    {type:'radio', name:'q18', q:`Which credit-card habit best describes you?`, opts:['Pay full monthly','Occasionally carry balance','Often carry balance','No credit card'], explain:'Interest quickly dwarfs rewards.'},
+    {type:'range', name:'q19', q:`Percentage of monthly income spent on discretionary <span class="tooltip" data-tip="Non-essential spending like dining or hobbies.">lifestyle expenses</span>?`, min:0, max:100, step:5, def:30, explain:'Curbing lifestyle creep frees capital.'},
+    {type:'radio', name:'q20', q:`Overall confidence managing your <span class="tooltip" data-tip="Budgeting, saving, investing, debt-management.">personal-finance</span>?`, opts:['Low','Moderate','High','Very High'], explain:'Self-awareness is the first step.'}
+  ];
+
+  // ===== 构建幻灯片 =====
+  const slides = document.getElementById('slides');
+  slides.style.width = `${Qs.length + 2}00vw`;
+  Qs.forEach((Q,i) => {
+    const s = document.createElement('div');
+    s.className='slide'; s.dataset.idx=i;
+    let inner='';
+    if(Q.type==='radio') {
+      inner=Q.opts.map(o=>`<label><input type="radio" name="${Q.name}" value="${o}" required><span>${o}</span></label>`).join('');
+    } else if(Q.type==='range') {
+      inner=`<input type="range" name="${Q.name}" min="${Q.min}" max="${Q.max}" step="${Q.step}" value="${Q.def}"><span class="rangeVal">${Q.def}%</span>`;
+    } else {
+      inner=`<div class="chartBox"><canvas id="${Q.name}_cv"></canvas></div>`;
+    }
+    s.innerHTML=`
+      <h2>${i+1} / ${Qs.length+2}</h2>
+      <p class="question">${Q.q}</p>
+      <form>${inner}</form>
+      <div class="summary"></div>
+      <div class="nav">
+        ${i?'<button class="prev">Back</button>':''}
+        <button class="next">${i===Qs.length-1?'Finish':'Next'}</button>
+      </div>`;
+    slides.appendChild(s);
+  });
+  // Review
+  const rev=document.createElement('div');
+  rev.className='slide'; rev.dataset.idx=Qs.length; rev.id='review';
+  rev.innerHTML=`
+    <h2>Review Your Answers</h2>
+    <div id="analysis"></div>
+    <div class="nav"><button class="prev">Back</button><button id="toPlan">Next</button></div>`;
+  slides.appendChild(rev);
+  // Plan
+  const pl=document.createElement('div');
+  pl.className='slide'; pl.dataset.idx=Qs.length+1; pl.id='planSlide';
+  pl.innerHTML=`
+    <h2>Your Personalised Plan & Reading List</h2>
+    <div id="plan"></div>
+    <button id="restart">Restart</button>`;
+  slides.appendChild(pl);
+
+  // ===== 导航逻辑 =====
+  let idx=0, ans={};
+  function go(i){ idx=i; slides.style.transform=`translateX(-${i*100}vw)`; }
+  go(0);
+  slides.addEventListener('click',e=>{
+    if(e.target.matches('.next')){
+      const sl=e.target.closest('.slide');
+      sl.querySelectorAll('input').forEach(inp=>{
+        if(inp.type==='radio'&&inp.checked) ans[inp.name]=inp.value;
+        if(inp.type==='range') ans[inp.name]=inp.value;
+      });
+      // 必填校验
+      const reqs=sl.querySelectorAll('input[required]');
+      for(const r of reqs){
+        if(r.type==='radio'&&!sl.querySelector(`input[name="${r.name}"]:checked`)){
+          alert('Please select an option.'); return;
+        }
+      }
+      if(idx<Qs.length-1) go(idx+1);
+      else if(idx===Qs.length-1){ buildReview(); go(Qs.length); }
+    }
+    if(e.target.matches('.prev') && idx>0) go(idx-1);
+  });
+  slides.addEventListener('input',e=>{
+    if(e.target.type==='range') e.target.nextElementSibling.textContent=e.target.value+'%';
+  });
+  slides.addEventListener('change',e=>{
+    const sl=e.target.closest('.slide'), q=Qs[sl.dataset.idx];
+    if(!q) return;
+    const v=e.target.type==='radio'?e.target.value:e.target.value+'%';
+    sl.querySelector('.summary').textContent=`You chose: ${v}. ${q.explain}`;
+  });
+  // 术语提示
+  const gloss=document.getElementById('glossary');
+  slides.addEventListener('mouseover',e=>{
+    const tip=e.target.closest('.tooltip');
+    if(tip){ gloss.textContent=tip.dataset.tip; gloss.style.display='block'; }
+  });
+  slides.addEventListener('mouseout',e=>{
+    if(e.target.closest('.tooltip')) gloss.style.display='none';
+  });
+
+  // ===== Review & Plan =====
+  function buildReview(){
+    let html='<ol style="padding-left:18px">';
+    Qs.forEach(q=> html+=`<li style="margin:6px 0"><strong>${q.name.toUpperCase()}</strong>: ${ans[q.name]||'—'}</li>`);
+    html+='</ol>';
+    document.getElementById('analysis').innerHTML=html;
+  }
+  function buildPlan(){
+    const risk=ans.q5||'Undetermined', know=ans.q13||'None';
+    const tier= know==='Advanced'? 'Advanced' : know==='Intermediate'? 'Intermediate' : 'Beginner';
+    const books={
+      Beginner:[
+        ['"The Simple Path to Wealth" – J.L. Collins','Foundational index‑investing guide.'],
+        ['"I Will Teach You to Be Rich" – Ramit Sethi','Automation & behavioural scripts.']
+      ],
+      Intermediate:[
+        ['"A Random Walk Down Wall Street" – Burton Malkiel','Efficient‑market insights & asset allocation.'],
+        ['"Common Sense on Mutual Funds" – John Bogle','Low‑cost portfolio philosophy.']
+      ],
+      Advanced:[
+        ['"Adaptive Markets" – Andrew Lo','Behavioural finance meets EMH.'],
+        ['"Quantitative Trading" – Ernest Chan','Strategy design & backtesting.']
+      ]
+    };
+    let html=`<p>Your responses suggest a <strong>${risk}</strong> reaction to market swings and a <strong>${know.toLowerCase()}</strong> understanding of diversification. `;
+    html+=`Boost your savings rate from <strong>${ans.q1}%</strong> toward at least 15% and build an emergency fund covering <strong>${ans.q2} months</strong> of expenses. `;
+    html+=`If applicable, prioritise high‑interest student‑loan repayment before aggressive investing.</p><p>Recommended reading:</p><ul>`;
+    books[tier].forEach(([t,w])=> html+=`<li><em>${t}</em> – ${w}</li>`);
+    html+='</ul>';
+    document.getElementById('plan').innerHTML=html;
+  }
+  document.addEventListener('click',e=>{
+    if(e.target.id==='toPlan'){ buildPlan(); go(Qs.length+1); }
+    if(e.target.id==='restart'){ location.reload(); }
+  });
+
+  // ===== K 线图渲染 & 自由绘线 =====
+  function renderCandles(ctx,data,W,H){
+    const barW=W/data.length;
+    const minLow=Math.min(...data.map(d=>d[2])), maxHigh=Math.max(...data.map(d=>d[1]));
+    const y=v=> H - ((v-minLow)/(maxHigh-minLow))*H;
+    ctx.lineWidth=1;
+    data.forEach((d,i)=>{
+      const [o,hi,lo,c]=d, x=i*barW+barW*0.1;
+      // 影线
+      ctx.beginPath();
+      ctx.moveTo(x+barW*0.4, y(hi));
+      ctx.lineTo(x+barW*0.4, y(lo));
+      ctx.strokeStyle='#444'; ctx.stroke();
+      // 实体
+      ctx.fillStyle=c>=o?'#22c55e':'#ef4444';
+      const top=y(Math.max(o,c)), h=Math.abs(y(o)-y(c))||1;
+      ctx.fillRect(x, top, barW*0.8, h);
+    });
+    // 自由绘线
+    let drawing=false;
+    const cv=ctx.canvas;
+    cv.addEventListener('pointerdown',e=>{ drawing=true; ctx.beginPath(); ctx.moveTo(e.offsetX,e.offsetY); });
+    cv.addEventListener('pointermove',e=>{ if(!drawing) return; ctx.lineWidth=2; ctx.strokeStyle='#f59e0b'; ctx.lineTo(e.offsetX,e.offsetY); ctx.stroke(); });
+    ['pointerup','pointerleave'].forEach(ev=>cv.addEventListener(ev,()=>drawing=false));
+  }
+  function drawBullishFlag(id){
+    const cv=document.getElementById(id), ctx=cv.getContext('2d');
+    const W=cv.width=820,H=cv.height=420;
+    ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,W,H);
+    let data=[],price=50;
+    // 强劲上涨
+    for(let i=0;i<30;i++){
+      const o=price;
+      price+=Math.random()*5+3;
+      const c=price+(Math.random()*4-2);
+      const hi=Math.max(o,c)+Math.random()*3+1;
+      const lo=Math.min(o,c)-Math.random()*3-1;
+      data.push([o,hi,lo,c]);
+    }
+    // 回调旗形段
+    for(let i=0;i<25;i++){
+      const o=price;
+      price-=(Math.random()*1.5+0.5);
+      const c=price+(Math.random()*2-1);
+      const hi=Math.max(o,c)+Math.random()*1.5;
+      const lo=Math.min(o,c)-Math.random()*1.5;
+      data.push([o,hi,lo,c]);
+    }
+    renderCandles(ctx,data,W,H);
+  }
+  function drawAscendingTriangle(id){
+    const cv=document.getElementById(id), ctx=cv.getContext('2d');
+    const W=cv.width=820,H=cv.height=420;
+    ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,W,H);
+    let data=[],lowBase=30,highLevel=70;
+    for(let i=0;i<60;i++){
+      if(i%15===0 && i>0) highLevel+=(Math.random()*2-1);
+      lowBase+=(Math.random()*0.8+0.2);
+      const hi=highLevel+(Math.random()*2-1);
+      const lo=lowBase-(Math.random()*2-1);
+      const o=lo+Math.random()*(hi-lo);
+      const c=lo+Math.random()*(hi-lo);
+      data.push([o,hi,lo,c]);
+    }
+    renderCandles(ctx,data,W,H);
+  }
+  window.addEventListener('DOMContentLoaded',()=>{
+    drawBullishFlag('q6_cv');
+    drawAscendingTriangle('q14_cv');
+  });
+  </script>
+</body>
+</html>
